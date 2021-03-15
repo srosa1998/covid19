@@ -48,7 +48,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r preliminares, message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
 #Configurando pasta de trabalho
 
-setwd("C:\\Users\\egypt\\OneDrive - Fundacao Getulio Vargas - FGV\\MBA FGV\\Estatística espacial")
+setwd("exemplo")
 
 #Carregando os pacotes necessários
 
