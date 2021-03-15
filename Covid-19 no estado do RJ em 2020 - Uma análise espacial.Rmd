@@ -1,0 +1,566 @@
+---
+title: "**Covid-19 no estado do RJ em 2020 - uma análise espacial**"
+author: "Samantha Rosa"
+date: "14/03/2021"
+output: html_document
+---
+
+
+
+# Finalidade e esclarecimentos sobre o estudo
+<br/>
+
+
+<font size="3"> O presente estudo tem a finalidade de investigar a existência de um padrão espacial para a Covid-19 no estado do RJ e, em confirmando, encontrar um modelo razoável que leve em conta tal padrão.
+
+No início deste trabalho, não havia clareza sobre qual seria a variável-alvo mais adequada para modelagem: número de casos, número de mortes, ambas ou ainda uma combinação das duas como, por exemplo, a taxa de mortes em relação ao número de casos, ou ainda, alguma transformação destas. As que produziram os melhores resultados com as variáveis explicativas disponibilizadas foram a taxa mortes/casos e a raiz quadrada desta taxa. No caso desta última, para a interpretação dos resultados, é necessário elevá-la ao quadrado.
+
+Ainda, os dados incialmente eram mensais mas optou-se por agregá-los ao invés de fazer um modelo para cada mês, pois o tempo é um recurso escasso. Em uma análise mais aprofundada, os dados desagregados temporalmente poderiam ser olhados mais afundo.
+
+Os modelos testados sem sucesso não serão aqui expostos para não cansar o leitor.</font>
+
+<br/>
+
+<font size="3">**Significado das variáveis disponibilizadas:**
+
+•	leitos_sus: taxa de leitos do sus por 100 mil habitantes
+
+•	resps_total: número total de respiradores
+
+•	ivs: índice de vulnerabilidade social; 0: menor vulnerabilidade, 1: maior vulnerabilidade
+
+•	idhm2010: índice de desenvolvimento humano para o ano 2010; 0: menos desenvolvido, 1: mais desenvolvido 
+
+•	pop_nbranca: tamanho da população não-branca
+
+•	prop_ab: proporção da população com acesso a rede de atenção básica
+
+•	prop_cad: proporção da população com registro no cadastro único (instrumento que identifica e caracteriza as famílias de baixa renda, permitindo que o governo conheça melhor a realidade socioeconômica dessa população)
+
+•	prop_id: proporção da população com idade acima de 60 anos
+
+•	pop2019: estimativas populacionais do IBGE para o ano 2019</font> <br />
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r preliminares, message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
+#Configurando pasta de trabalho
+
+setwd("C:\\Users\\egypt\\OneDrive - Fundacao Getulio Vargas - FGV\\MBA FGV\\Estatística espacial")
+
+#Carregando os pacotes necessários
+
+library(sf)
+library(MASS)
+library(RColorBrewer)
+library(spdep)
+library(tidyverse)
+library(cartography)
+library(tmap)
+library(spatialreg)
+library(corrplot)
+library(DT)
+library(ggthemes)
+library(nortest)
+
+#Importando e formatando a base de dados
+
+CovidRJ = read_delim("base_obitos_casos_mes_rj.csv", 
+                     delim = ";", locale = locale(decimal_mark = ",")) #temos decimal separado por vírgulas
+
+Encoding(CovidRJ$mun) = "latin1" #encoding adequado para palavras com acento, cedilha, etc
+
+
+CovidRJ$mun = factor(CovidRJ$mun)
+CovidRJ$codibge = factor(CovidRJ$codibge)
+
+#Agregando o número de casos e de mortes no ano para cada município
+
+CovidRJ$total_casos = apply(CovidRJ[,3:12],1,sum)
+
+CovidRJ$total_mortes = apply(CovidRJ[,13:22],1,sum)
+
+CovidRJ_agregado = CovidRJ
+
+CovidRJ_agregado[,3:22] = NULL
+
+#Importando o shape file do RJ 
+
+ShapeRJ = read_sf("municipiosrj.shp") ; ShapeRJ
+
+st_crs(ShapeRJ)
+
+#Join entre a base de dados agregada e o shape
+
+ShapeRJ_covid = right_join(ShapeRJ,CovidRJ_agregado, by = c("GEOCODIGO"="codibge"))
+
+ShapeRJ_covid[,1:6] = NULL
+
+```
+
+<br/>
+<br/>
+
+## Prévia dos dados
+
+<br/>
+
+```{r Prévia dos dados, echo=FALSE, message=FALSE, warning=FALSE}
+
+CovidRJ_agregado %>% datatable()
+
+```
+
+<br/>
+<br/>
+
+## Mapa da doença no RJ sob diferentes perspectivas
+<font size="2">Mapa interativo</font>
+
+<br/>
+
+```{r mapas, echo=FALSE, message=FALSE, warning=FALSE}
+
+ #análise espacial das mortes
+
+tmap_mode("view")
+Mapa_mortes = tm_shape(ShapeRJ_covid) +
+  tm_fill(col = c("total_mortes"),
+          palette = "Reds",
+          title = "Mortes por Covid-19 no Estado do RJ - 2020",
+          popup.vars = c("Total de óbitos: "="total_mortes"),
+          simplify = 0.5)+
+  tm_borders()
+
+ #análise espacial das mortes proporcionalmente ao tamanho da pop
+
+
+ShapeRJ_covid$Mortes_Por_Num_Hab = (ShapeRJ_covid$total_mortes/ShapeRJ_covid$pop2019)*100
+ShapeRJ_covid$Mortes_Por_Num_Hab = round(ShapeRJ_covid$Mortes_Por_Num_Hab, digits = 2)
+
+tmap_mode("view")
+Mapa_MortesHab = tm_shape(ShapeRJ_covid) +
+  tm_fill(col = "Mortes_Por_Num_Hab",
+          palette = "Reds",
+          title = "% Mortes por Covid-19/nº hab no Estado do RJ - 2020",
+          popup.vars = c("% Mortes/habitantes: "="Mortes_Por_Num_Hab"),
+          simplify = 0.5)+
+  tm_borders()
+
+ #análise espacial dos casos
+
+tmap_mode("view")
+Mapa_casos = tm_shape(ShapeRJ_covid) +
+  tm_fill(col = "total_casos",
+          palette = "Reds",
+          title = "Casos de Covid-19 no Estado do RJ - 2020",
+          popup.vars = c("Total de casos: "="total_casos"),
+          simplify = 0.5)+
+  tm_borders()
+
+ #análise espacial dos casos proporcionalmente ao tamanho da pop
+
+ShapeRJ_covid$Casos_Por_Num_Hab = (ShapeRJ_covid$total_casos/ShapeRJ_covid$pop2019)*100
+ShapeRJ_covid$Casos_Por_Num_Hab = round(ShapeRJ_covid$Casos_Por_Num_Hab, digits = 2)
+
+
+tmap_mode("view")
+Mapa_CasosHab =  tm_shape(ShapeRJ_covid) +
+  tm_fill(col = "Casos_Por_Num_Hab",
+          palette = "Reds",
+          title = "% Casos de Covid-19/nº hab no Estado do RJ - 2020",
+          popup.vars = c("% Casos/habitantes: "="Casos_Por_Num_Hab"),
+          simplify = 0.5)+
+  tm_borders()
+
+#análise espacial da tx mortes/casos
+
+ShapeRJ_covid$MortesporCasos = ShapeRJ_covid$total_mortes/ShapeRJ_covid$total_casos
+ShapeRJ_covid$RoundMortesporCasos = round(ShapeRJ_covid$MortesporCasos, digits = 2)
+
+tmap_mode("view")
+Mapa_mortesporcasos =  tm_shape(ShapeRJ_covid) +
+  tm_fill(col = "RoundMortesporCasos",
+          palette = "Reds",
+          title = "Tx. mortes/casos de Covid-19 no Estado do RJ - 2020",
+          popup.vars = c("Tx. mortes/casos: "="RoundMortesporCasos"),
+          simplify = 0.5)+
+  tm_borders()
+
+
+Painel_mapas = tmap_arrange(Mapa_casos,
+                            Mapa_CasosHab,
+                            Mapa_mortes,
+                            Mapa_MortesHab); Painel_mapas
+Mapa_mortesporcasos
+
+```
+
+<br/>
+
+<font size="3"> Percebe-se que o padrão espacial sob cada uma das perspectivas trazidas pelos mapas acima é diferente quando se comparam as variáveis absolutas com as relativas. Os municípios com os maiores números absolutos nem sempre são os maiores em números relativos.</font> <br />
+
+<br/>
+<br/>
+
+
+# Autocorrelação linear
+
+<br/>
+
+<font size="3"> Analisando a correlação linear das variáveis 2 a 2.</font> <br />
+
+<br/>
+
+```{r correlações, echo=FALSE, message=FALSE, warning=FALSE}
+
+ShapeRJ_covid$leitos_sus_porHab = ShapeRJ_covid$leitos_sus/100000
+ShapeRJ_covid$leitos_sus_abs = ShapeRJ_covid$leitos_sus_porHab*ShapeRJ_covid$pop2019
+
+Dataset =  tibble(total_casos = ShapeRJ_covid$total_casos,
+                   total_mortes = ShapeRJ_covid$total_mortes,
+                   "Mortes/casos" = ShapeRJ_covid$MortesporCasos,
+                   "Leitos_sus nº abs" = ShapeRJ_covid$leitos_sus_abs,
+                   resps_total = ShapeRJ_covid$resps_total,
+                   ivs = ShapeRJ_covid$ivs,
+                   idhm2010 = ShapeRJ_covid$idhm2010,
+                   pop_nbranca = ShapeRJ_covid$pop_nbranca,
+                   prop_ab = ShapeRJ_covid$prop_ab,
+                   prop_cad = ShapeRJ_covid$prop_cad,
+                   prop_id = ShapeRJ_covid$prop_id,
+                   pop2019 = ShapeRJ_covid$pop2019)
+
+correlacao = round(cor(Dataset),2)
+correlacao %>% datatable()
+
+corrplot(correlacao, method = "color")
+
+```
+<br/>
+
+<font size="3"> Observa-se que algumas variáveis possuem uma correlação perfeita ou quase perfeita (próxima a 1 ou -1), como a autocorrelação entre total de casos e mortes com a população não branca. Esta se deve, provavelmente, ao fato de que ambas são também altamente correlacionadas ao tamanho da população.
+
+ Ainda, temos autocorrelação perfeita entre IDHM e a proporção da população com acesso à rede de atenção básica (esta, negativa)¹.
+
+ O efeito dessa multicolinearidade, na prática, é a impossibilidade de obter um modelo satisfatório que use todas as variáveis explicativas fornecidadas.
+
+ De forma resumida, a multicolineariedade (variáveis independentes com relações lineares exatas ou aproximadamente exatas) comumente gera problemas em modelos de regressão linear e nos modelos das famílias SAR e CAR (modelos de regressão linear que levam em conta a existência de correlação espacial nos dados).
+
+ No caso dos primeiros, os coeficientes estimados seriam insignificantes, já que, por definição, estimam o impacto da variação unitária de uma variável explicativa na variável dependente, *tudo mais constante*. Ora, se uma ou mais variáveis explicativas são fortemente correlacionadas, dificilmente haverá variação em uma sem que haja na(s) outra(s).
+
+ Já no caso dos últimos, a colineariedade/multicolinearidade fará, muito provavelmente, com que a matriz de vizinhança espacial obtida seja não invertível, sobretudo se for utilizado no cálculo da ponderação de cada vizinho na matriz o peso padronizado por linhas, o que impede a estimação usando esses 2 tipos de modelo. A matriz não invertível decorre da existência de colunas linearmente dependentes, ou seja, de variáveis explicativas altamente autocorrelacionadas.
+
+ Por isso, não foi possível o uso de todas as variáveis explicativas fornecidas no modelo. Após inúmeras combinações, decidiu-se modelar a variáveis taxa de mortes/casos (ou, caso seja necessário, alguma transformação desta variável) em função das seguintes variáveis explicativas: *prop_ab*, *resps_total*, *total_casos* e *total_mortes*.</font>
+
+<br/>
+
+## Há autocorrelação espacial nos dados?
+<br/>
+
+<font size="3">Afirmar que há autocorrelação espacial nos dados significa, no contexto analisado, dizer que os casos e/ou mortes por Covid-19 observados em um município do estado do RJ têm relação com os casos e/ou mortes observados nas cidades consideradas vizinhas.
+
+Já foi observada, anteriormente, a correlação linear entre as variáveis explicativas e as possíveis candidadatas à variável-alvo (número de casos, número de mortes ou a taxa de mortes/casos ou, ainda, alguma transformada de uma destas 3). Porém, esta não captura a correlação espacial. 
+
+Saber se há ou não correlação espacial é importante para verificar qual tipo de modelo utilizar. 
+
+Caso haja autocorrelação espacial significativa nos dados, o modelo de regressão linear seria inadequado, pois um de seus pressupostos é a independência dos resíduos (erro do modelo) e o mesmo seria violado devido à dependência dos municípios com seus vizinhos.
+
+Para a verificação da existência de dependência espacial foi utilizado o teste de Moran global, que fornece tanto o valor do índice de Moran global (grau dessa dependência) e se esse valor obtido é ou não estatisticamente significativo. Caso o índice de Moran global seja positivo e o seu p-valor menor que 0.05, pode-se afirmar que existe dependência espacial global com 95% de confiança.</font>
+
+<br/>
+
+```{r critérios de vizinhança, echo=FALSE, message=FALSE, warning=FALSE}
+
+#W com o criterio queen e peso padronizado por linhas
+
+W_queen = poly2nb(pl = ShapeRJ_covid,
+                  queen = TRUE)
+W_queen_pesoW = nb2listw(neighbours = W_queen, 
+                          style="W")
+
+#W com o criterio queen e peso binário
+
+W_queen_pesoB = nb2listw(neighbours = W_queen,
+                         style="B") 
+
+#W com critério Rook e peso padronizado por linhas
+
+W_rook = poly2nb(pl = ShapeRJ_covid,
+                 queen = FALSE)
+W_rook_pesoW = nb2listw(neighbours = W_rook,
+                  style = "W")
+
+#W com critério Rook e peso binário
+
+W_rook_pesoB = nb2listw(neighbours = W_rook,
+                        style = "B") 
+
+#Testes de significância para a autocorrelação espacial global utilizando os 4 critérios de vizinhança calculados acima
+
+MoranGlobal_QueenW = moran.test(x = ShapeRJ_covid$MortesporCasos, #Variável-alvo MORTES/CASOS
+           listw = W_queen_pesoW)
+
+MoranGlobal_QueenB = moran.test(x = ShapeRJ_covid$MortesporCasos,
+           listw = W_queen_pesoB)
+
+MoranGlobal_RookW = moran.test(x = ShapeRJ_covid$MortesporCasos,
+           listw = W_rook_pesoW)
+
+MoranGlobal_RookB = moran.test(x = ShapeRJ_covid$MortesporCasos,
+           listw = W_rook_pesoB)
+
+
+Dataset_MoranGlobal =  tibble("Critério de Vizinhança" = c("Queen W", 
+                                                           "Queen B", 
+                                                           "Rook W", 
+                                                           "Rook B"),
+                   "P-valor aprox." = c(round(MoranGlobal_QueenW$p.value,2),
+                                        round(MoranGlobal_QueenB$p.value,2), 
+                                        round(MoranGlobal_RookW$p.value,2),
+                                        round(MoranGlobal_RookB$p.value,2)),
+                   "Resultado" = c("Autocorrelação espacial significativa",
+                                      "Autocorrelação espacial significativa",
+                                      "Autocorrelação espacial significativa",
+                                      "Autocorrelação espacial significativa"))
+
+
+Dataset_MoranGlobal %>% datatable()
+
+```
+
+<br/>
+
+Vê-se que, seja qual for o critério adotado, a correlação espacial global é significativa e deve ser levada em conta na análise. Portanto, já descarta-se a possibilidade do uso da técnica de regressão linear para a modelagem.
+
+<br/>
+<br/>
+
+```{r moran local, echo=FALSE, message=FALSE, warning=FALSE}
+
+MoranLocal = localmoran(x = ShapeRJ_covid$MortesporCasos, #Moran Local com Rook B
+                         listw = W_rook_pesoB, 
+                         na.action = na.exclude, 
+                         zero.policy = TRUE)
+
+
+
+MoranLocal_df = as.tibble(MoranLocal)
+MoranLocal_df$E.Ii = NULL
+MoranLocal_df$Var.Ii = NULL
+MoranLocal_df$Z.Ii = NULL
+
+MoranLocal_df$Ii = round(MoranLocal_df$Ii, 2)
+MoranLocal_df$`Pr(z > 0)` = round(MoranLocal_df$`Pr(z > 0)`, 2)
+
+
+
+ #Acrescentando o índice moran local e sua significância no shape
+ShapeRJ_covid$MoranLocal = MoranLocal_df$Ii           
+
+ShapeRJ_covid$moran_p = MoranLocal_df$`Pr(z > 0)`
+ShapeRJ_covid$moran_p = as.numeric(ShapeRJ_covid$moran_p)
+
+ #Plotando Moran local no mapa coroplético e sua significancia
+
+                                                                          
+ShapeRJ_covid$MoranLocal = as.numeric(ShapeRJ_covid$MoranLocal)
+
+tmap_mode("view")
+
+Mapa_MoranL = tm_shape(ShapeRJ_covid)+
+  tm_fill("MoranLocal",
+          palette = "Reds",
+          breaks = c(0,10,15,20,30),
+          title = "Correlação local - mortes/casos Covid 2020",
+          popup.vars = c("I. de Moran Local: "="MoranLocal"),
+          simplify = 0.5)+
+  tm_borders()
+
+
+
+Mapa_MoranLocal_sig = tm_shape(ShapeRJ_covid)+
+  tm_fill("moran_p",
+          palette = c("red","pink","grey"),
+          breaks = c(0, 0.01, 0.05, 1),
+          title = "Significância estatística: correlação local - mortes/casos Covid 2020",
+          popup.vars = c("P-valor I. Moran Local: "="moran_p"),
+          simplify = 0.5)+
+  tm_borders()
+
+Painel_MoranLocal = tmap_arrange(Mapa_MoranL,
+                                 Mapa_MoranLocal_sig) ; Painel_MoranLocal
+```
+
+<br/>
+
+<font size="3">Para um grande número de subáreas (municípios, no caso), é interessante usar também um índice de autocorrelação local para identificar melhor as subáreas mais importantes para a análise. Calculando-se o Índice de Moran Local (LISA) foi possível classificar os municípios em função do nível de significância dos valores de seus índices locais. Nos mapas, podem ser identificados os municípios não significativos ao nível de 5% de probabilidade (em tons de cinza). Os municípios coloridos, por sua vez, são aqueles com características peculiares e de maior importância/peso para a análise do padrão espacial existente e também são os de maior autocorrelação local como podemos ver nos mapas de correlação entre os municípios.</font>
+
+<br/>
+<br/>
+
+## Modelagem - comparação, apresentação e interpretação
+
+<br/>
+
+<font size="3"> Modelos SAR e CAR foram testados com diferentes variáveis explicativas (como já foi dito, foram mantidas *prop_ab*, *resps_total*, *total_casos* e *total_mortes*) e com diferentes matrizes de vizinhança (critérios Queen e Rook, co pesos binários e padronizados por linhas), aqui vamos comparar os resultados obtidos. 
+
+No caso dos modelos da família SAR, vamos comparar apenas os que atenderam aos seus pressupostos: normalidade e independência dos resíduos. O modelo CAR não tem esses pressupostos, então foram comparados todos os que apresentaram coeficientes significativos (tanto das variáveis explicativas como o que reflete o componente espacial da análise - *lambda*). 
+
+A seguir, será apresentado e interpretado o modelo com o melhor resultado possível (dentre os modelos testados), segundo o critério de informação de Akaike (AIC). 
+
+O modelo que melhor se ajusta aos dados será o que tem menor AIC, pois o AIC estima a quantidade relativa de informações perdidas por um determinado modelo: quanto menos informações um modelo perde, maior a qualidade desse modelo e menor a pontuação AIC. </font>
+
+<br/>
+
+```{r modelos, echo=FALSE, message=FALSE, warning=FALSE}
+
+#TRANSFORMAÇÃO (nenhum modelo SAR conseguiu satisfazer os pressupostos da normalidade e independência dos resíduos tendo como variável alvo mortes/casos ou total de casos ou total de mortes ou alguma transformação destas 2 últimas, por isso a opção pela raiz quadrada de mortes/casos)
+
+ShapeRJ_covid$Sqrt_MortesporCasos= sqrt(ShapeRJ_covid$MortesporCasos)
+
+#Modelos SAR
+
+SAR5 = spautolm(formula = Sqrt_MortesporCasos ~           #SAR MATRIZ W_queen_pesoW
+                  prop_ab + 
+                  resps_total +
+                  total_casos+
+                  total_mortes,
+                data = ShapeRJ_covid, 
+                listw = W_queen_pesoW, 
+                family = "SAR")
+
+SAR6 = spautolm(formula = Sqrt_MortesporCasos ~           #SAR MATRIZ W_queen_pesoB
+                  prop_ab + 
+                  resps_total +
+                  total_casos+
+                  total_mortes,
+                data = ShapeRJ_covid, 
+                listw = W_queen_pesoB, 
+                family = "SAR") 
+
+SAR7 = spautolm(formula = Sqrt_MortesporCasos ~           #SAR MATRIZ W_rook_pesoW
+                  prop_ab + 
+                  resps_total +
+                  total_casos+
+                  total_mortes,
+                data = ShapeRJ_covid, 
+                listw = W_rook_pesoW, 
+                family = "SAR")
+
+SAR8 = spautolm(formula = Sqrt_MortesporCasos ~               #SAR MATRIZ W_rook_pesoB
+                  prop_ab + 
+                  resps_total +
+                  total_casos+
+                  total_mortes,
+                data = ShapeRJ_covid, 
+                listw = W_rook_pesoB, 
+                family = "SAR") 
+
+#Modelos CAR
+
+CAR2 = spautolm(formula = MortesporCasos ~           #CAR MATRIZ W_queen_pesoB
+                  prop_ab + 
+                  resps_total +
+                  total_casos+
+                  total_mortes,
+                data = ShapeRJ_covid, 
+                listw = W_queen_pesoB, 
+                family = "CAR")              
+
+
+CAR4 = spautolm(formula = MortesporCasos ~           #CAR MATRIZ W_rook_pesoB
+                  prop_ab + 
+                  resps_total +
+                  total_casos+
+                  total_mortes,
+                data = ShapeRJ_covid, 
+                listw = W_rook_pesoB, 
+                family = "CAR") 
+
+
+
+#vamos modelar a variável transformada Sqrt_MortesporCasos usando CAR tamvbém
+
+CAR6 = spautolm(formula = Sqrt_MortesporCasos ~       #CAR MATRIZ W_queen_pesoB
+                  prop_ab + 
+                  resps_total +
+                  total_casos+
+                  total_mortes,
+                data = ShapeRJ_covid, 
+                listw = W_queen_pesoB, 
+                family = "CAR")           
+
+CAR8 = spautolm(formula = Sqrt_MortesporCasos ~       #CAR MATRIZ W_rook_pesoB
+                  prop_ab + 
+                  resps_total +
+                  total_casos+
+                  total_mortes,
+                data = ShapeRJ_covid, 
+                listw = W_rook_pesoB, 
+                family = "CAR")
+
+Resultados = tibble("AIC"= c(round(AIC(SAR5),2),
+                             round(AIC(SAR6),2),
+                             round(AIC(SAR7),2),
+                             round(AIC(SAR8),2),
+                             round(AIC(CAR2),2),
+                             round(AIC(CAR4),2),
+                             round(AIC(CAR6),2),
+                             round(AIC(CAR8),2)),
+                    "Variável alvo"=c("Sqrt mortes/casos",
+                                      "Sqrt mortes/casos",
+                                      "Sqrt mortes/casos",
+                                      "Sqrt mortes/casos",
+                                      "mortes/casos",
+                                      "mortes/casos",
+                                      "Sqrt mortes/casos",
+                                      "Sqrt mortes/casos"),
+                    "Modelo"=c("SAR com critério Queen W",
+                               "SAR com critério Queen B",
+                               "SAR com critério Rook W",
+                               "SAR com critério Rook B",
+                               "CAR com critério Queen B",
+                               "CAR com critério Rook B",
+                               "CAR com critério Queen B",
+                               "CAR com critério Rook B"))
+Resultados %>% datatable()
+
+```
+
+<br/>
+
+<font size="3"> Portanto, o modelo da família CAR com critério de vizinhança Rook com pesos binários para os municípios vizinhos foi o melhor obtido, segundo o critério AIC. Os modelos CAR incluem a estrutura de dependência espacial dos dados nos resíduo (ao invés de incluir na média como o SAR) e por isso são chamados de *Conditional* Autoregressive Models.
+
+A seguir, este modelo será apresentado e interpretado. </font>
+
+<br/>
+
+```{r melhor modelo obtido, echo=FALSE, message=FALSE, warning=FALSE}
+
+summary(CAR4)
+
+```
+
+<br/>
+<font size="3">**Interpretação dos coeficientes:**
+
+•	Lambda (ρ estimado): foi estimado um valor positivo de 0.16, o que indica a existência de uma dependência espacial fraca da taxa de mortes/casos de Covid-19 no estado do RJ em 2020. Cerca de 16% da taxa de mortes/casos de um município esteve relacionada à taxa de mortes/casos de seus municípios vizinhos, de acordo com o critério Rook com ponderação binária. 
+
+•	prop_ab: quando a relação entre as pessoas com acesso à rede de atenção básica e o total da população aumentou/caiu em uma unidade na média, a taxa de mortes/casos da Covid-19 em um município do RJ em 2020 variou em praticamente zero em média, o que indica que a variável afetou em praticamente nada a média da taxa de mortes/sobre casos no estado do RJ  em 2020.
+
+•	resps_total: idem à interpretação do coeficiente da variável explicativa prop_ab
+
+•	total_casos: idem 
+
+•	total_mortes: idem
+
+Percebe-se que as variáveis explicativas fornecidas não têm muita influência sobre a variável-alvo escolhida.
+
+Mesmo escolhendo o modelo com a menor informação perdida (menor AIC), as variáveis não ajudam a explicar muito a variação média da taxa mortes/casos no estado do RJ em 2020, o que faz acreditar que não tenha mesmo muita informação contida nas variáveis explicativas.  
+
+</font>
+<br/>
+
+<font size="1">¹Em princípio, é estranho que a correlação entre IDHM e o acesso da população à rede de atenção básica seja fortemente negativa, pois espera-se que quanto mais pessoas tenham acesso à saúde pública básica, melhor a qualidade de vida da população do município. No entanto, sob outro ponto de vista, poderia-se pensar que quanto mais pessoas utilizam a rede pública de saúde, menor é o poder aquisitivo da população, uma variável que também é levada em conta no cálculo do IDHM. Para mais certeza de qual a interpretação correta, seria necessário ter acesso à fonte dos dados fornecidos e/ou a forma de cálculo desses indicadores.</font>
